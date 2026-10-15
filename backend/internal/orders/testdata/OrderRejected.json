@@ -1,0 +1,26 @@
+{
+  "point_id": "0198c0de-0000-7000-8000-000000000012",
+  "order_id": "0198c0de-0000-7000-8000-000000000001",
+  "rejected_by": {
+    "type": "user",
+    "id": "7b2d9c10-operator"
+  },
+  "items": [
+    {
+      "dish_id": "0198c0de-0000-7000-8000-000000000002",
+      "portions": 2
+    }
+  ],
+  "shortages": [
+    {
+      "product_id": "0198c0de-0000-7000-8000-000000000003",
+      "required_quantity": 160,
+      "available_quantity": 50
+    },
+    {
+      "product_id": "0198c0de-0000-7000-8000-000000000004",
+      "required_quantity": 120,
+      "available_quantity": 0
+    }
+  ]
+}

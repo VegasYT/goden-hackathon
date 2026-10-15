@@ -1,0 +1,13 @@
+{
+  "point_id": "0198c0de-0000-7000-8000-000000000008",
+  "product_id": "0198c0de-0000-7000-8000-000000000001",
+  "batch_id": "0198c0de-0000-7000-8000-000000000004",
+  "delta": -50,
+  "reason": "inventory_count",
+  "comment": "пересчёт",
+  "correction_id": "0198c0de-0000-7000-8000-000000000007",
+  "adjusted_by": {
+    "type": "user",
+    "id": "4f1c2a7e-manager"
+  }
+}

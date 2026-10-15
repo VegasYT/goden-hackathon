@@ -1,0 +1,134 @@
+version: "2"
+
+run:
+  build-tags:
+    - integration
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - errorlint
+    - forbidigo
+    - gocritic
+  settings:
+    depguard:
+      rules:
+        # platform - инфраструктурный код, о доменных модулях не знает
+        platform:
+          list-mode: lax
+          files:
+            - "**/internal/platform/**"
+          deny:
+            - pkg: goden/backend/internal/catalog
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/inventory
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/orders
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/stoplist
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/recommendations
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/analytics
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/notifications
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/generator
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/migom
+              desc: platform не импортирует доменные модули
+            - pkg: goden/backend/internal/organization
+              desc: platform не импортирует доменные модули
+        # подпакет db модуля доступен только самому модулю: при добавлении модуля добавь правило
+        organization-db:
+          list-mode: lax
+          files:
+            - "!**/internal/organization/**"
+          deny:
+            - pkg: goden/backend/internal/organization/db
+              desc: таблицы модуля organization читает и меняет только он сам
+        catalog-db:
+          list-mode: lax
+          files:
+            - "!**/internal/catalog/**"
+          deny:
+            - pkg: goden/backend/internal/catalog/db
+              desc: таблицы модуля catalog читает и меняет только он сам
+        inventory-db:
+          list-mode: lax
+          files:
+            - "!**/internal/inventory/**"
+          deny:
+            - pkg: goden/backend/internal/inventory/db
+              desc: таблицы модуля inventory читает и меняет только он сам
+        orders-db:
+          list-mode: lax
+          files:
+            - "!**/internal/orders/**"
+          deny:
+            - pkg: goden/backend/internal/orders/db
+              desc: таблицы модуля orders читает и меняет только он сам
+        stoplist-db:
+          list-mode: lax
+          files:
+            - "!**/internal/stoplist/**"
+          deny:
+            - pkg: goden/backend/internal/stoplist/db
+              desc: таблицы модуля stoplist читает и меняет только он сам
+        recommendations-db:
+          list-mode: lax
+          files:
+            - "!**/internal/recommendations/**"
+          deny:
+            - pkg: goden/backend/internal/recommendations/db
+              desc: таблицы модуля recommendations читает и меняет только он сам
+        analytics-db:
+          list-mode: lax
+          files:
+            - "!**/internal/analytics/**"
+          deny:
+            - pkg: goden/backend/internal/analytics/db
+              desc: таблицы модуля analytics читает и меняет только он сам
+        migom-db:
+          list-mode: lax
+          files:
+            - "!**/internal/migom/**"
+          deny:
+            - pkg: goden/backend/internal/migom/db
+              desc: таблицы модуля migom читает и меняет только он сам
+        generator-db:
+          list-mode: lax
+          files:
+            - "!**/internal/generator/**"
+          deny:
+            - pkg: goden/backend/internal/generator/db
+              desc: таблицы модуля generator читает и меняет только он сам
+        notifications-db:
+          list-mode: lax
+          files:
+            - "!**/internal/notifications/**"
+          deny:
+            - pkg: goden/backend/internal/notifications/db
+              desc: таблицы модуля notifications читает и меняет только он сам
+    forbidigo:
+      forbid:
+        - pattern: '^time\.Now$'
+          msg: текущее время берётся через clock.Clock
+  exclusions:
+    rules:
+      # платформа реализует сами часы и тестовую обвязку, тестам время нужно для таймаутов
+      - path: internal/platform/
+        linters:
+          - forbidigo
+      - path: _test\.go
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      # имя модуля без точки: без этой настройки gofumpt примет его пакеты за стандартную библиотеку
+      module-path: goden/backend

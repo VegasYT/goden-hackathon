@@ -1,0 +1,3468 @@
+openapi: 3.0.3
+info:
+  title: Goden API
+  version: 0.1.0
+  description: |
+    API системы мониторинга остатков, сроков годности и стоп-листов ресторана.
+
+    Общие правила:
+    - ошибки возвращаются в формате application/problem+json (RFC 9457);
+    - списки читаются постранично параметрами limit и offset;
+    - запросы на запись принимают заголовок Idempotency-Key: повтор с тем же ключом
+      и тем же телом возвращает результат первого запроса;
+    - заголовок X-Correlation-Id связывает запрос с логами и событиями; сервер возвращает его в ответе;
+    - каждый запрос несёт access token Keycloak в заголовке Authorization: Bearer; без токена ответ 401,
+      без права на операцию - 403. Право операции записано в её security. Права пользователя определяют
+      владение компанией и роль на точке, в токене их нет; их отдаёт GET /me.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: organization
+    description: Компании, точки и сотрудники; права на точке и в компании (ADR-013).
+  - name: catalog
+    description: Продукты, блюда и рецептуры.
+  - name: deliveries
+    description: Поставки и их приёмка.
+  - name: stock
+    description: Партии и остатки.
+  - name: orders
+    description: Заказы.
+  - name: kitchen
+    description: Меню и стоп-лист.
+  - name: recommendations
+    description: Горячие предложения и рекомендации поставок.
+  - name: migom
+    description: Подключение сервиса доставки Мигом к точке.
+  - name: suppliers
+    description: Поставщики компании и их ключи; операции поставщика по ключу (ADR-014).
+  - name: analytics
+    description: Статистика потерь и дефицита, прогноз стоп-листа.
+  - name: generator
+    description: Управление генератором событий.
+  - name: realtime
+    description: Сигналы об изменении данных для frontend.
+paths:
+  /companies/{companyId}/products:
+    post:
+      operationId: createProduct
+      security:
+        - bearerAuth: [products.manage]
+      summary: Создать продукт
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewProduct"
+      responses:
+        "201":
+          description: Продукт создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listProducts
+      security:
+        - bearerAuth: [catalog.view]
+      summary: Список продуктов по алфавиту
+      description: Без status отдаёт только неархивные продукты.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: q
+          in: query
+          description: Часть названия без учёта регистра; знаки шаблона не действуют
+          schema: {type: string, maxLength: 200}
+        - name: category
+          in: query
+          description: Точное совпадение категории
+          schema: {type: string, maxLength: 200}
+        - name: status
+          in: query
+          description: Работающие (по умолчанию) или архивные
+          schema:
+            $ref: "#/components/schemas/CatalogStatus"
+        - name: sort
+          in: query
+          description: По названию (по умолчанию) или по категории, внутри категории по названию; без категории в конце
+          schema:
+            type: string
+            enum: [name, category]
+            default: name
+      responses:
+        "200":
+          description: Страница списка продуктов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/products/{productId}:
+    get:
+      operationId: getProduct
+      security:
+        - bearerAuth: [catalog.view]
+      summary: Продукт по идентификатору
+      description: Вместе с блюдами, в рецептурах которых он есть (used_in).
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: Продукт
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: changeProduct
+      security:
+        - bearerAuth: [products.manage]
+      summary: Изменить продукт
+      description: >-
+        Переданные поля меняются, остальные сохраняются. Единица меняется, только пока продукт
+        не использовался (unit_locked: false), иначе 409 unit-locked.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductChange"
+      responses:
+        "200":
+          description: Продукт после изменения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/products/{productId}/archive:
+    post:
+      operationId: archiveProduct
+      security:
+        - bearerAuth: [products.manage]
+      summary: Отправить продукт в архив
+      description: Продукт из рецептуры неархивного блюда в архив не уходит, 409 product-in-use.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Продукт в архиве
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/products/{productId}/restore:
+    post:
+      operationId: restoreProduct
+      security:
+        - bearerAuth: [products.manage]
+      summary: Восстановить продукт из архива
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Продукт восстановлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/product-categories:
+    get:
+      operationId: listProductCategories
+      security:
+        - bearerAuth: [catalog.view]
+      summary: Категории продуктов компании
+      description: По названию, с числом неархивных продуктов; пустые категории не входят.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+      responses:
+        "200":
+          description: Категории
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductCategories"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/dishes:
+    post:
+      operationId: createDish
+      security:
+        - bearerAuth: [dishes.manage]
+      summary: Создать блюдо
+      description: Рецептуру можно передать сразу; без неё блюдо создаётся с пустой рецептурой.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewDish"
+      responses:
+        "201":
+          description: Блюдо создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listDishes
+      security:
+        - bearerAuth: [catalog.view]
+      summary: Список блюд с рецептурами по алфавиту
+      description: Без status отдаёт только неархивные блюда.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: q
+          in: query
+          description: Часть названия без учёта регистра; знаки шаблона не действуют
+          schema: {type: string, maxLength: 200}
+        - name: status
+          in: query
+          description: Работающие (по умолчанию) или архивные
+          schema:
+            $ref: "#/components/schemas/CatalogStatus"
+        - name: recipe
+          in: query
+          description: missing - только блюда без рецептуры
+          schema:
+            type: string
+            enum: [missing]
+      responses:
+        "200":
+          description: Страница списка блюд
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DishPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/dishes/{dishId}:
+    get:
+      operationId: getDish
+      security:
+        - bearerAuth: [catalog.view]
+      summary: Блюдо с рецептурой
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/DishId"
+      responses:
+        "200":
+          description: Блюдо
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: renameDish
+      security:
+        - bearerAuth: [dishes.manage]
+      summary: Переименовать блюдо
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/DishId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DishChange"
+      responses:
+        "200":
+          description: Блюдо с новым названием
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/dishes/{dishId}/archive:
+    post:
+      operationId: archiveDish
+      security:
+        - bearerAuth: [dishes.manage]
+      summary: Отправить блюдо в архив
+      description: Архивного блюда нет в меню, стоп-листе и прогнозе всех точек, заказ с ним отклоняется.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/DishId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Блюдо в архиве
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/dishes/{dishId}/restore:
+    post:
+      operationId: restoreDish
+      security:
+        - bearerAuth: [dishes.manage]
+      summary: Восстановить блюдо из архива
+      description: Блюдо с архивным продуктом в рецептуре не восстанавливается, 409 archived-ingredients.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/DishId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Блюдо восстановлено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/dishes/{dishId}/recipe:
+    put:
+      operationId: changeRecipe
+      security:
+        - bearerAuth: [dishes.manage]
+      summary: Заменить рецептуру блюда
+      description: Новая рецептура заменяет прежнюю целиком.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/DishId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Recipe"
+      responses:
+        "200":
+          description: Блюдо с новой рецептурой
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dish"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries:
+    post:
+      operationId: registerDelivery
+      security:
+        - bearerAuth: [deliveries.register]
+      summary: Зарегистрировать поставку
+      description: Регистрация не меняет остатки. Партии появляются после приёмки.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewDelivery"
+      responses:
+        "201":
+          description: Зарегистрировать поставку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listDeliveries
+      security:
+        - bearerAuth: [deliveries.view]
+      summary: Список поставок
+      description: |
+        От более поздней даты поставки к более ранней. Список строится асинхронно и отстаёт
+        от записи на доли секунды; чтение поставки по идентификатору не отстаёт.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: status
+          in: query
+          description: Только поставки в этом статусе
+          schema:
+            type: string
+            enum: [registered, approved]
+        - name: quarantine
+          in: query
+          description: "open - только поставки с позицией в карантине, по которой нет решения"
+          schema:
+            type: string
+            enum: [open]
+        - name: number
+          in: query
+          description: Только поставки, номер которых начинается с этого текста, без учёта регистра
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort
+          in: query
+          description: Порядок по дате поставки; минус - от поздних к ранним
+          schema:
+            type: string
+            enum: [delivered_at, -delivered_at]
+            default: -delivered_at
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница поставок
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries/summary:
+    get:
+      operationId: getDeliveriesSummary
+      security:
+        - bearerAuth: [deliveries.view]
+      summary: Сводка по поставкам точки
+      description: Строится по тому же списку, что и страница поставок, и так же отстаёт от записи на доли секунды.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Сводка по поставкам
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliverySummary"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries/{deliveryId}:
+    get:
+      operationId: getDelivery
+      security:
+        - bearerAuth: [deliveries.view]
+      summary: Поставка с результатами приёмки
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DeliveryId"
+      responses:
+        "200":
+          description: Поставка с результатами приёмки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries/{deliveryId}/history:
+    get:
+      operationId: getDeliveryHistory
+      security:
+        - bearerAuth: [deliveries.view]
+      summary: История поставки
+      description: |
+        По записи на каждое событие поставки в порядке появления: регистрация, приёмка, решения
+        по карантину, корректировки. В записи - состояние поставки сразу после события.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DeliveryId"
+      responses:
+        "200":
+          description: История поставки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryHistory"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries/{deliveryId}/approval:
+    post:
+      operationId: approveDelivery
+      security:
+        - bearerAuth: [deliveries.approve]
+      summary: Принять поставку
+      description: Решение по каждой позиции. Сумма принятого, отклонённого и карантинного равна заявленному количеству.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DeliveryId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeliveryApproval"
+      responses:
+        "200":
+          description: Принять поставку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries/{deliveryId}/items/{itemId}/quarantine-resolution:
+    post:
+      operationId: resolveQuarantine
+      security:
+        - bearerAuth: [deliveries.approve]
+      summary: Принять решение по карантину позиции
+      description: Одно решение на всё карантинное количество позиции. Сумма принятой и отклонённой части равна карантинному количеству.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DeliveryId"
+        - $ref: "#/components/parameters/ItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuarantineResolution"
+      responses:
+        "200":
+          description: Принять решение по карантину позиции
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/deliveries/{deliveryId}/corrections:
+    post:
+      operationId: correctDeliveryApproval
+      security:
+        - bearerAuth: [deliveries.approve]
+      summary: Исправить приёмку поставки
+      description: Перераспределяет заявленное количество позиций. Исходная приёмка не меняется.
+      tags: [deliveries]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DeliveryId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalCorrection"
+      responses:
+        "200":
+          description: Исправить приёмку поставки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/products/{productId}/batches:
+    get:
+      operationId: listProductBatches
+      security:
+        - bearerAuth: [inventory.view]
+      summary: Партии продукта в порядке FEFO
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/ProductId"
+        - name: in_stock
+          in: query
+          description: Только партии с остатком больше нуля
+          schema:
+            type: boolean
+            default: false
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Партии продукта в порядке FEFO
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchList"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/products/{productId}/movements:
+    get:
+      operationId: listProductMovements
+      security:
+        - bearerAuth: [inventory.view]
+      summary: Движения по продукту
+      description: От последних к ранним. Размер страницы - число движений; расход по заказу из нескольких партий - одно движение.
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница движений
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MovementPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/stock:
+    get:
+      operationId: getStock
+      security:
+        - bearerAuth: [inventory.view]
+      summary: Остатки по складу
+      description: |
+        По строке на продукт каталога, по названию. Читается из таблицы партий и не отстаёт от записи.
+        Просрочка и статус определяются на момент запроса. Общее число считается после фильтров.
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: q
+          in: query
+          description: Начало названия продукта, без учёта регистра
+          schema:
+            type: string
+            maxLength: 200
+        - name: category
+          in: query
+          description: Категория продукта, точное совпадение
+          schema:
+            type: string
+            maxLength: 200
+        - name: status
+          in: query
+          description: Статус остатка; статусы не исключают друг друга
+          schema:
+            $ref: "#/components/schemas/StockStatus"
+        - name: sort
+          in: query
+          description: Порядок; минус - обратный. Продукты без ближайшего срока при сортировке по сроку идут последними
+          schema:
+            type: string
+            enum: [name, -name, nearest_expiry, -nearest_expiry, available, -available]
+            default: name
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница остатков
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/stock/summary:
+    get:
+      operationId: getStockSummary
+      security:
+        - bearerAuth: [inventory.view]
+      summary: Число продуктов по статусам остатка
+      description: Считается по тем же данным и на тот же момент, что остатки. Параметр status не принимает.
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: q
+          in: query
+          description: Начало названия продукта, без учёта регистра
+          schema:
+            type: string
+            maxLength: 200
+        - name: category
+          in: query
+          description: Категория продукта, точное совпадение
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        "200":
+          description: Сводка остатков
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockSummary"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/batches/expiring:
+    get:
+      operationId: listExpiringBatches
+      security:
+        - bearerAuth: [inventory.view]
+      summary: Партии с истекающим и истёкшим сроком годности
+      description: |
+        Партии с ненулевым остатком, срок годности которых истёк или истекает в пределах горизонта,
+        от ближайшего срока. Читается из таблицы партий и не отстаёт от записи. Просроченные партии
+        (expired = true) worker не списывает: они остаются в списке, пока их не спишут вручную
+        (writeOffStock с причиной expired). В заказы и меню просроченный остаток не идёт.
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: within_hours
+          in: query
+          description: Горизонт в часах от текущего момента
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 8760
+            default: 72
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница истекающих партий
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpiringBatchPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/batches/{batchId}:
+    get:
+      operationId: getBatch
+      security:
+        - bearerAuth: [inventory.view]
+      summary: Партия
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/BatchId"
+      responses:
+        "200":
+          description: Партия
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Batch"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/batches/{batchId}/write-offs:
+    post:
+      operationId: writeOffStock
+      security:
+        - bearerAuth: [inventory.edit]
+      summary: Списать количество из партии
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/BatchId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WriteOff"
+      responses:
+        "200":
+          description: Списать количество из партии
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Batch"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/batches/{batchId}/adjustments:
+    post:
+      operationId: adjustStock
+      security:
+        - bearerAuth: [inventory.edit]
+      summary: Исправить остаток партии
+      tags: [stock]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/BatchId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Adjustment"
+      responses:
+        "200":
+          description: Исправить остаток партии
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Batch"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/orders:
+    post:
+      operationId: placeOrder
+      security:
+        - bearerAuth: [orders.accept]
+      summary: Оформить заказ
+      description: "Ответ 201 возвращается и для отклонённого заказа: смотрите поле status. При нехватке продуктов заказ отклоняется целиком, остатки не меняются."
+      tags: [orders]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewOrder"
+      responses:
+        "201":
+          description: Оформить заказ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listOrders
+      security:
+        - bearerAuth: [orders.view]
+      summary: История заказов
+      description: |
+        От более поздних заказов к более ранним, принятые, отклонённые и отменённые. История строится
+        асинхронно и отстаёт от записи на доли секунды; чтение заказа по идентификатору не отстаёт.
+      tags: [orders]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: status
+          in: query
+          description: Только заказы в этом статусе
+          schema:
+            type: string
+            enum: [accepted, rejected, cancelled]
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница заказов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/orders/{orderId}:
+    get:
+      operationId: getOrder
+      security:
+        - bearerAuth: [orders.view]
+      summary: Заказ
+      tags: [orders]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: Заказ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/orders/{orderId}/cancel:
+    post:
+      operationId: cancelOrder
+      security:
+        - bearerAuth: [orders.cancel]
+      summary: Отменить заказ
+      description: |
+        Отменяет принятый заказ и возвращает продукты в партии, из которых их взяли под этот заказ.
+        Возвращённое в партию с истёкшим сроком остаётся просроченным. Отклонённый и уже отменённый
+        заказ отменить нельзя: 409. Можно ли ещё вернуть продукты (заказ не начали готовить), решает вызывающий.
+        Тело необязательное: комментарий к отмене виден в заказе, Мигом показывает его покупателю.
+      tags: [orders]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/OrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderCancellation"
+      responses:
+        "200":
+          description: Отменённый заказ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/menu:
+    get:
+      operationId: getMenu
+      security:
+        - bearerAuth: [kitchen.view]
+      summary: "Меню: все блюда с доступностью"
+      description: |
+        Блюда, которые продаются на точке, по названию с числом порций, которые можно приготовить из её текущих остатков.
+        Считается при каждом запросе по тем же остаткам и тому же правилу, что оформление заказа:
+        если показано N порций, заказ на N порций этого блюда будет принят.
+      tags: [kitchen]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница блюд с доступностью
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DishAvailabilityPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/stop-list:
+    get:
+      operationId: getStopList
+      security:
+        - bearerAuth: [kitchen.view]
+      summary: "Стоп-лист: блюда, которые сейчас нельзя приготовить"
+      description: |
+        Блюдо попадает в стоп-лист и выходит из него автоматически: после заказа, списания,
+        поставки, истечения срока годности или изменения рецептуры. В limiting - продукты,
+        которых не хватает на порцию.
+      tags: [kitchen]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница блюд с доступностью
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DishAvailabilityPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/recommendations/dishes:
+    get:
+      operationId: listDishRecommendations
+      security:
+        - bearerAuth: [recommendations.view]
+      summary: "Горячие предложения: блюда, продажу которых стоит стимулировать"
+      description: |
+        Рейтинг блюд, которые можно приготовить и в составе которых есть продукт из партии с истекающим
+        сроком годности. Приоритет - сумма по таким продуктам произведения четырёх множителей от 0 до 1:
+        срочность (чем ближе срок, тем выше), охват (какую долю количества под риском блюдо способно
+        израсходовать), значимость (ниже 1, если под риском меньше одной порции) и исключительность
+        (выше у блюда - единственного потребителя продукта). Множители возвращаются в причинах.
+        Считается при каждом запросе по текущим остаткам и времени.
+      tags: [recommendations]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: horizon_hours
+          in: query
+          description: "Горизонт: партии, истекающие в его пределах, считаются под риском"
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 720
+            default: 72
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница горячих предложений от самого приоритетного
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DishRecommendationPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/recommendations/dishes/settings:
+    get:
+      operationId: listHotOfferSettings
+      security:
+        - bearerAuth: [recommendations.view]
+      summary: Ручные настройки горячих предложений точки
+      description: Блюда, добавленные вручную или скрытые сегодня, в порядке изменения; истёкшее скрытие в список не входит.
+      tags: [recommendations]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Настройки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HotOfferSettings"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/recommendations/dishes/{dishId}:
+    put:
+      operationId: setHotOffer
+      security:
+        - bearerAuth: [menu.manage]
+      summary: Добавить блюдо в горячие предложения, скрыть его или вернуть расчёту
+      description: >-
+        pinned - добавлено вручную и идёт первым, пока блюдо можно приготовить; hidden - не показывается до конца дня в часовом поясе time_zone;
+        auto - решает расчёт. Только на работающей точке.
+      tags: [recommendations]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DishId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HotOfferChange"
+      responses:
+        "200":
+          description: Режим блюда после изменения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HotOfferSetting"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/recommendations/deliveries:
+    get:
+      operationId: listDeliveryRecommendations
+      security:
+        - bearerAuth: [recommendations.view]
+      summary: "Рекомендации поставок: что пора заказывать"
+      description: |
+        Продукты, доступного остатка которых при расходе под заказы за последний период хватит меньше
+        чем на заданный запас по времени, и продукты, которых нет при том, что они нужны блюдам.
+        Рекомендуемое количество доводит запас до целевого. От самых срочных.
+      tags: [recommendations]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: window_hours
+          in: query
+          description: Период, за который считается расход
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 720
+            default: 24
+        - name: cover_hours
+          in: query
+          description: Запас по времени, ниже которого рекомендуется поставка
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 720
+            default: 24
+        - name: target_hours
+          in: query
+          description: Целевой запас по времени; не меньше cover_hours
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 2160
+            default: 72
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница рекомендаций поставок
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryRecommendationPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/analytics/write-offs:
+    get:
+      operationId: getWriteOffStatistics
+      security:
+        - bearerAuth: [analytics.view]
+      summary: Статистика списаний за период
+      tags: [analytics]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: from
+          in: query
+          description: Начало периода включительно. По умолчанию - за семь суток до конца периода.
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          description: Конец периода исключительно. По умолчанию - текущий момент.
+          schema: {type: string, format: date-time}
+      responses:
+        "200":
+          description: Списания по продуктам и причинам
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteOffStatistics"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/analytics/write-offs/days:
+    get:
+      operationId: getWriteOffDays
+      security:
+        - bearerAuth: [analytics.view]
+      summary: Списания за период по дням
+      tags: [analytics]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: from
+          in: query
+          description: Начало периода включительно. По умолчанию - за семь суток до конца периода.
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          description: Конец периода исключительно. По умолчанию - текущий момент.
+          schema: {type: string, format: date-time}
+        - name: time_zone
+          in: query
+          description: Часовой пояс IANA, в котором считаются границы дня, например Europe/Moscow.
+          schema: {type: string, default: UTC, maxLength: 64}
+      responses:
+        "200":
+          description: Списания по дням, продуктам и причинам; дней без списаний нет
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteOffDays"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/analytics/shortages:
+    get:
+      operationId: getShortageStatistics
+      security:
+        - bearerAuth: [analytics.view]
+      summary: Рейтинг дефицитных ингредиентов за период
+      tags: [analytics]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: from
+          in: query
+          description: Начало периода включительно. По умолчанию - за семь суток до конца периода.
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          description: Конец периода исключительно. По умолчанию - текущий момент.
+          schema: {type: string, format: date-time}
+      responses:
+        "200":
+          description: Продукты по влиянию дефицита
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShortageStatistics"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/analytics/stop-list-forecast:
+    get:
+      operationId: getStopListForecast
+      security:
+        - bearerAuth: [analytics.view]
+      summary: Прогноз попадания блюд в стоп-лист
+      tags: [analytics]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - name: window_hours
+          in: query
+          description: Период истории расхода
+          schema: {type: integer, format: int32, minimum: 1, maximum: 720, default: 24}
+        - name: horizon_hours
+          in: query
+          description: Горизонт прогноза
+          schema: {type: integer, format: int32, minimum: 1, maximum: 2160, default: 168}
+      responses:
+        "200":
+          description: Ближайшие прогнозируемые попадания в стоп-лист
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopListForecasts"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/generator:
+    get:
+      operationId: getGeneratorSettings
+      security:
+        - bearerAuth: [generator.manage]
+      summary: Настройки генератора событий на точке
+      description: У точки, для которой настройки не задавали, генератор остановлен. Доступно владельцу компании.
+      tags: [generator]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Настройки генератора
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratorSettings"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: updateGeneratorSettings
+      security:
+        - bearerAuth: [generator.manage]
+      summary: Изменить настройки генератора событий на точке
+      description: "Включённый генератор создаёт на точке поставки и заказы с заданной интенсивностью и наполняет пустой каталог её компании демонстрационным набором. Новые настройки применяются без перезапуска, в пределах периода опроса. Доступно владельцу компании."
+      tags: [generator]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeneratorSettings"
+      responses:
+        "200":
+          description: Новые настройки генератора
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratorSettings"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/migom:
+    get:
+      operationId: getMigomOnPoint
+      security:
+        - bearerAuth: [company.manage]
+      summary: Какое заведение сервиса доставки Мигом подключено к точке
+      description: У точки, где подключение не включали, Мигом не подключён. Доступно владельцу компании.
+      tags: [migom]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Подключение Мигома
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigomOnPoint"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: setMigomOnPoint
+      security:
+        - bearerAuth: [company.manage]
+      summary: Подключить к точке заведение сервиса доставки Мигом или отключить его
+      description: |
+        Пока Мигом подключён, а точка и компания работают, учётная запись Мигома (роль migom.integration)
+        читает меню точки, оформляет и читает на ней заказы и отменяет свои. Отключение отзывает права сразу.
+        Учётная запись у Мигома одна на все заведения, поэтому привязка двусторонняя: Мигом работает с точкой
+        для заведения, только если владелец заведения в Мигоме указал эту точку, а здесь указано это заведение.
+        Подключить можно только работающую точку (на отключённой - 409), отключить - всегда. Доступно владельцу компании.
+      tags: [migom]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MigomOnPoint"
+      responses:
+        "200":
+          description: Подключение Мигома
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigomOnPoint"
+        default:
+          $ref: "#/components/responses/Error"
+  /migom/points:
+    get:
+      operationId: listMigomPoints
+      # право есть только у сервисной учётной записи Мигома, проверяется по токену
+      security:
+        - bearerAuth: [migom.integration]
+      summary: Точки, к которым подключены заведения Мигома
+      description: |
+        Пары "точка - заведение" работающих точек. По ним Мигом сверяет точку, которую владелец заведения указал в Мигоме.
+        Операция сервиса доставки Мигом. Пользователям, в том числе владельцам, недоступна.
+      tags: [migom]
+      responses:
+        "200":
+          description: Подключённые точки
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MigomPoint"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/suppliers:
+    get:
+      operationId: listSuppliers
+      security:
+        - bearerAuth: [company.manage]
+      summary: Поставщики компании
+      description: По названию. Ключей в ответе нет. Доступно только владельцу компании.
+      tags: [suppliers]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+      responses:
+        "200":
+          description: Поставщики компании
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Supplier"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createSupplier
+      security:
+        - bearerAuth: [company.manage]
+      summary: Завести поставщика
+      description: |
+        Название уникально в компании без учёта регистра, точки - работающие точки компании.
+        Ключ поставщика есть только в этом ответе. Доступно только владельцу компании.
+      tags: [suppliers]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewSupplier"
+      responses:
+        "201":
+          description: Поставщик заведён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/suppliers/{supplierId}:
+    put:
+      operationId: updateSupplier
+      security:
+        - bearerAuth: [company.manage]
+      summary: Изменить название и точки поставщика
+      description: Доступно только владельцу компании.
+      tags: [suppliers]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/SupplierId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewSupplier"
+      responses:
+        "200":
+          description: Поставщик изменён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/suppliers/{supplierId}/key:
+    post:
+      operationId: issueSupplierKey
+      security:
+        - bearerAuth: [company.manage]
+      summary: Выпустить поставщику новый ключ
+      description: Прежний ключ сразу перестаёт действовать. Новый ключ есть только в этом ответе.
+      tags: [suppliers]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/SupplierId"
+      responses:
+        "200":
+          description: Ключ выпущен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: revokeSupplierKey
+      security:
+        - bearerAuth: [company.manage]
+      summary: Отозвать ключ поставщика
+      description: Ключ сразу перестаёт действовать, новый не выдаётся.
+      tags: [suppliers]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/SupplierId"
+      responses:
+        "200":
+          description: Ключ отозван
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+        default:
+          $ref: "#/components/responses/Error"
+  /supplier:
+    get:
+      operationId: getSupplierSelf
+      # право есть только у клиента с ключом поставщика
+      security:
+        - bearerAuth: [supplier.access]
+      summary: Поставщик по ключу
+      description: |
+        Название поставщика, его компания и работающие точки из его списка: на них поставщик регистрирует поставки.
+        Операция поставщика, пользователям недоступна.
+      tags: [suppliers]
+      responses:
+        "200":
+          description: Поставщик
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupplierSelf"
+        default:
+          $ref: "#/components/responses/Error"
+  /supplier/products:
+    get:
+      operationId: listSupplierProducts
+      security:
+        - bearerAuth: [supplier.access]
+      summary: Продукты компании для поставщика
+      description: |
+        Неархивные продукты компании поставщика по алфавиту, без блюд и рецептур.
+        Операция поставщика, пользователям недоступна.
+      tags: [suppliers]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: q
+          in: query
+          description: Часть названия без учёта регистра; знаки шаблона не действуют
+          schema: {type: string, maxLength: 200}
+      responses:
+        "200":
+          description: Страница продуктов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /generator/points:
+    get:
+      operationId: listGeneratorPoints
+      # право есть только у сервисной учётной записи генератора, проверяется по токену
+      security:
+        - bearerAuth: [generator.run]
+      summary: Точки, на которых генератор включён
+      description: Операция генератора событий. Пользователям, в том числе владельцам, недоступна.
+      tags: [generator]
+      responses:
+        "200":
+          description: Точки с включённым генератором
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GeneratorPoint"
+        default:
+          $ref: "#/components/responses/Error"
+  /me:
+    get:
+      operationId: getMe
+      security:
+        - bearerAuth: []
+      summary: Профиль пользователя
+      description: "Компании, которыми пользователь владеет, и точки, на которых он может работать, с ролью и правами на каждой. Первое обращение запоминает пользователя: после него его можно назначить на точку по адресу почты."
+      tags: [organization]
+      responses:
+        "200":
+          description: Профиль пользователя
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies:
+    post:
+      operationId: createCompany
+      security:
+        - bearerAuth: []
+      summary: Создать компанию
+      description: Компанию создаёт любой вошедший пользователь и становится её владельцем.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCompany"
+      responses:
+        "201":
+          description: Создать компанию
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Company"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}:
+    get:
+      operationId: getCompany
+      security:
+        - bearerAuth: [company.view]
+      summary: Компания
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+      responses:
+        "200":
+          description: Компания
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Company"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: renameCompany
+      security:
+        - bearerAuth: [company.manage]
+      summary: Переименовать компанию
+      description: Доступно только владельцу компании.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCompany"
+      responses:
+        "200":
+          description: Переименовать компанию
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Company"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/owner:
+    put:
+      operationId: transferCompany
+      security:
+        - bearerAuth: [company.manage]
+      summary: Передать компанию другому владельцу
+      description: >-
+        Доступно только владельцу. Новый владелец получает все права сразу, прежний теряет их
+        и назначений на точки не получает. Отключённая компания не передаётся.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewOwner"
+      responses:
+        "200":
+          description: Компания с новым владельцем
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Company"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/disable:
+    post:
+      operationId: disableCompany
+      security:
+        - bearerAuth: [company.manage]
+      summary: Отключить компанию
+      description: После отключения компания и её точки не меняются, сотрудники теряют права. Доступно только владельцу компании.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Отключить компанию
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Company"
+        default:
+          $ref: "#/components/responses/Error"
+  /companies/{companyId}/points:
+    get:
+      operationId: listPoints
+      security:
+        - bearerAuth: [company.manage]
+      summary: Точки компании
+      description: Все точки компании, включая отключённые. Доступно только владельцу компании.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+      responses:
+        "200":
+          description: Точки компании
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Point"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createPoint
+      security:
+        - bearerAuth: [company.manage]
+      summary: Создать точку
+      description: Название уникально в пределах компании без учёта регистра. Доступно только владельцу компании.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/CompanyId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPoint"
+      responses:
+        "201":
+          description: Создать точку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Point"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}:
+    get:
+      operationId: getPoint
+      security:
+        - bearerAuth: [point.view]
+      summary: Точка
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Точка
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Point"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: renamePoint
+      security:
+        - bearerAuth: [company.manage]
+      summary: Переименовать точку
+      description: Доступно только владельцу компании.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPoint"
+      responses:
+        "200":
+          description: Переименовать точку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Point"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/disable:
+    post:
+      operationId: disablePoint
+      security:
+        - bearerAuth: [company.manage]
+      summary: Отключить точку
+      description: После отключения состав точки не меняется, сотрудники теряют на ней права. Доступно только владельцу компании.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Отключить точку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Point"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/telegram-chat:
+    put:
+      operationId: setPointTelegramChat
+      security:
+        - bearerAuth: [notifications.manage]
+      summary: Задать точке чат Telegram для уведомлений
+      description: "Уведомления о сроках годности и автосписании точки уходят в этот чат. Запрос без chat_id снимает чат: точка перестаёт получать уведомления. Доступно владельцу компании и управляющему точки."
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PointTelegramChat"
+      responses:
+        "200":
+          description: Точка после изменения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Point"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/staff:
+    get:
+      operationId: listStaff
+      security:
+        - bearerAuth: [staff.view]
+      summary: Сотрудники точки
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Сотрудники точки
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Staff"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: assignStaff
+      security:
+        - bearerAuth: [staff.manage]
+      summary: Назначить сотрудника на точку
+      description: Сотрудника находят по точному адресу почты; он должен хотя бы раз войти в систему. Управляющий точки не назначает управляющих.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewStaff"
+      responses:
+        "201":
+          description: Назначить сотрудника на точку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Staff"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/staff/{userId}:
+    put:
+      operationId: changeStaffRole
+      security:
+        - bearerAuth: [staff.manage]
+      summary: Сменить роль сотрудника на точке
+      description: Управляющий точки не меняет роль управляющего и не делает управляющим другого.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StaffRole"
+      responses:
+        "200":
+          description: Сменить роль сотрудника на точке
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Staff"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: removeStaff
+      security:
+        - bearerAuth: [staff.manage]
+      summary: Снять сотрудника с точки
+      description: Права на точке сотрудник теряет сразу. Управляющий точки не снимает управляющего.
+      tags: [organization]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204":
+          description: Снять сотрудника с точки
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/dishes:
+    get:
+      operationId: listPointDishes
+      security:
+        - bearerAuth: [catalog.view]
+      summary: Блюда компании на точке
+      description: Блюда компании точки по алфавиту с признаком, продаётся ли каждое на этой точке.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Страница списка блюд точки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PointDishPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/dishes/{dishId}:
+    put:
+      operationId: setDishOnPoint
+      security:
+        - bearerAuth: [menu.manage]
+      summary: Выключить или включить блюдо на точке
+      description: Блюдо компании продаётся на каждой её точке, пока его не выключили. Доступно управляющему точки и владельцу компании.
+      tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+        - $ref: "#/components/parameters/DishId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DishAvailabilityOnPoint"
+      responses:
+        "200":
+          description: Блюдо на точке после изменения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PointDish"
+        default:
+          $ref: "#/components/responses/Error"
+  /points/{pointId}/events:
+    get:
+      operationId: streamEvents
+      security:
+        - bearerAuth: [point.view]
+      summary: Поток сигналов об изменении данных точки
+      description: |
+        Ручной SSE-поток. После подключения приходит `sync`; изменения приходят как `update`.
+        Клиент получает сигналы только о событиях этой точки и каталога её компании.
+        Поле data каждого события - JSON по схеме RealtimeSync или RealtimeUpdate.
+        Пропущенные события не воспроизводятся: после переподключения клиент перечитывает REST.
+      tags: [realtime]
+      parameters:
+        - $ref: "#/components/parameters/PointId"
+      responses:
+        "200":
+          description: Поток Server-Sent Events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token Keycloak realm goden. Прав пользователя в токене нет; единственная client role клиента goden-api - generator.run.
+  parameters:
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DeliveryId:
+      name: deliveryId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DishId:
+      name: dishId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      description: Размер страницы
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      description: Сколько элементов пропустить
+      schema:
+        type: integer
+        format: int32
+        minimum: 0
+        default: 0
+    CompanyId:
+      name: companyId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PointId:
+      name: pointId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SupplierId:
+      name: supplierId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Идентификатор пользователя из профиля или списка сотрудников
+      schema:
+        type: string
+        maxLength: 200
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Ключ идемпотентности запроса на запись
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        # только печатные символы ASCII: ключ хранится как текст и сравнивается побайтно
+        pattern: "^[A-Za-z0-9._:-]+$"
+  responses:
+    Error:
+      description: Ошибка
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Role:
+      type: string
+      description: Роль сотрудника на точке
+      enum: [manager, approver, cook, waiter]
+    NewCompany:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+    Company:
+      type: object
+      required: [id, name, owner_id, active]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        owner_id:
+          type: string
+        active:
+          type: boolean
+          description: Отключённая компания не меняется
+    NewOwner:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          maxLength: 200
+          description: Адрес почты зарегистрированного пользователя, без учёта регистра
+    NewPoint:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+    Point:
+      type: object
+      required: [id, company_id, name, active]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        active:
+          type: boolean
+          description: Отключённая точка не меняется
+        telegram_chat_id:
+          type: integer
+          format: int64
+          description: Чат Telegram для уведомлений точки, если он задан
+    PointTelegramChat:
+      type: object
+      properties:
+        chat_id:
+          type: integer
+          format: int64
+          description: Числовой идентификатор личного чата, группы или канала; без поля чат снимается
+    NewStaff:
+      type: object
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          maxLength: 200
+          description: Адрес почты зарегистрированного пользователя, без учёта регистра
+        role:
+          $ref: "#/components/schemas/Role"
+    StaffRole:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+    Staff:
+      type: object
+      required: [user_id, email, name, role]
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+    ProfilePoint:
+      type: object
+      required: [id, company_id, company_name, name, active, owner, permissions]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        company_name:
+          type: string
+        name:
+          type: string
+        active:
+          type: boolean
+        owner:
+          type: boolean
+          description: Пользователь владеет компанией точки; роли на точке у владельца нет
+        role:
+          $ref: "#/components/schemas/Role"
+        permissions:
+          type: array
+          description: Права пользователя на точке
+          items:
+            type: string
+    Profile:
+      type: object
+      required: [id, email, name, companies, points]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        companies:
+          type: array
+          description: Компании, которыми пользователь владеет
+          items:
+            $ref: "#/components/schemas/Company"
+        points:
+          type: array
+          description: Все точки своих компаний и работающие точки, на которые пользователь назначен
+          items:
+            $ref: "#/components/schemas/ProfilePoint"
+    RealtimeCategory:
+      type: string
+      description: >-
+        deliveries - регистрация, приёмка, решение по карантину и исправление приёмки.
+        Складские события эту категорию не несут: остаток по позиции поставки обновляется по stock.
+        orders - принятый или отклонённый заказ точки; принятый заказ дополнительно несёт складские категории.
+        catalog - любое изменение каталога компании: продукты, блюда, рецептуры, блюда точки.
+      enum: [catalog, deliveries, expiry, orders, recommendations, stock, stop-list]
+    RealtimeSync:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/RealtimeCategory"
+    RealtimeUpdate:
+      type: object
+      required: [id, occurred_at, categories]
+      properties:
+        id:
+          type: string
+          format: uuid
+        occurred_at:
+          type: string
+          format: date-time
+        categories:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/RealtimeCategory"
+    Unit:
+      type: string
+      description: "Единица измерения продукта: граммы, миллилитры, штуки. Количество всегда целое число в этой единице."
+      enum: [g, ml, pcs]
+    NewProduct:
+      type: object
+      required: [name, unit]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        unit:
+          $ref: "#/components/schemas/Unit"
+        category:
+          type: string
+          maxLength: 200
+        shelf_life_days:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 3650
+          description: Срок хранения в днях
+    Product:
+      type: object
+      required: [id, company_id, name, unit, category, archived]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        unit:
+          $ref: "#/components/schemas/Unit"
+        category:
+          type: string
+        shelf_life_days:
+          type: integer
+          format: int32
+        archived:
+          type: boolean
+          description: Продукт в архиве
+        dishes:
+          type: integer
+          format: int64
+          description: Число неархивных блюд с продуктом в рецептуре. Есть в ответах каталога.
+        unit_locked:
+          type: boolean
+          description: Единицу уже нельзя менять - продукт использовался. Есть в ответах каталога.
+        used_in:
+          type: array
+          description: Неархивные блюда с продуктом в рецептуре. Есть в ответе на чтение продукта по идентификатору.
+          items:
+            $ref: "#/components/schemas/DishRef"
+    ProductChange:
+      type: object
+      description: Переданные поля меняются, остальные сохраняются.
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        unit:
+          $ref: "#/components/schemas/Unit"
+        category:
+          type: string
+          maxLength: 200
+        shelf_life_days:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 3650
+          nullable: true
+          description: Срок хранения в днях; null снимает срок
+    CatalogStatus:
+      type: string
+      enum: [active, archived]
+      default: active
+    ProductCategory:
+      type: object
+      required: [name, products]
+      properties:
+        name:
+          type: string
+        products:
+          type: integer
+          format: int64
+          description: Число неархивных продуктов категории
+    ProductCategories:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductCategory"
+    ProductPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    NewDish:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        ingredients:
+          type: array
+          minItems: 1
+          description: Рецептура; без неё блюдо создаётся с пустой рецептурой
+          items:
+            $ref: "#/components/schemas/Ingredient"
+    DishChange:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+    DishAvailabilityOnPoint:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Продаётся ли блюдо на точке
+    PointDish:
+      type: object
+      required: [dish_id, name, enabled]
+      properties:
+        dish_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        enabled:
+          type: boolean
+          description: Продаётся ли блюдо на точке
+    PointDishPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PointDish"
+        total:
+          type: integer
+          format: int64
+    Dish:
+      type: object
+      required: [id, company_id, name, ingredients, archived]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        ingredients:
+          type: array
+          description: Рецептура. У блюда без рецептуры она пустая.
+          items:
+            $ref: "#/components/schemas/DishIngredient"
+        archived:
+          type: boolean
+          description: Блюдо в архиве
+    DishIngredient:
+      type: object
+      required: [product_id, quantity, product_name, unit, product_archived]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          format: int64
+          description: Количество на одну порцию в единице измерения продукта
+        product_name:
+          type: string
+        unit:
+          $ref: "#/components/schemas/Unit"
+        product_archived:
+          type: boolean
+    Ingredient:
+      type: object
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1000000000000
+          description: Количество на одну порцию в единице измерения продукта
+    Recipe:
+      type: object
+      required: [ingredients]
+      properties:
+        ingredients:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Ingredient"
+    DishPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Dish"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    Actor:
+      type: object
+      description: Кто выполнил действие
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [user, service]}
+        id: {type: string, description: Логин пользователя или идентификатор клиента}
+        name:
+          type: string
+          description: Имя пользователя. Нет у сервисной учётной записи и у пользователя, чей логин системе ещё не известен
+    NewDelivery:
+      type: object
+      required: [number, delivered_at, items]
+      properties:
+        number: {type: string, maxLength: 200}
+        delivered_at: {type: string, format: date-time}
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/NewDeliveryItem"
+    NewDeliveryItem:
+      type: object
+      required: [product_id, declared_quantity, expires_at]
+      properties:
+        product_id: {type: string, format: uuid}
+        declared_quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000000}
+        expires_at: {type: string, format: date-time}
+        manufactured_at: {type: string, format: date-time}
+    Delivery:
+      type: object
+      required: [id, point_id, number, delivered_at, status, items]
+      properties:
+        id: {type: string, format: uuid}
+        point_id: {type: string, format: uuid}
+        number: {type: string}
+        delivered_at: {type: string, format: date-time}
+        status: {type: string, enum: [registered, approved]}
+        approved_at: {type: string, format: date-time}
+        approved_by:
+          $ref: "#/components/schemas/Actor"
+        corrected_at:
+          type: string
+          format: date-time
+          description: Время последнего исправления приёмки
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeliveryItem"
+    DeliverySummary:
+      type: object
+      required: [total, registered, approved, open_quarantine_items]
+      properties:
+        total: {type: integer, format: int64}
+        registered: {type: integer, format: int64, description: Ожидают приёмки}
+        approved: {type: integer, format: int64}
+        open_quarantine_items:
+          type: integer
+          format: int64
+          description: Число позиций в карантине, по которым нет решения
+    ItemDistribution:
+      type: object
+      description: Распределение заявленного количества позиции
+      required: [accepted_quantity, rejected_quantity, quarantined_quantity]
+      properties:
+        accepted_quantity: {type: integer, format: int64}
+        rejected_quantity: {type: integer, format: int64}
+        quarantined_quantity: {type: integer, format: int64}
+    QuarantineDecision:
+      type: object
+      description: Принятое решение по карантину позиции
+      required: [decided_at, decided_by, accepted_quantity, rejected_quantity]
+      properties:
+        decided_at: {type: string, format: date-time}
+        decided_by:
+          $ref: "#/components/schemas/Actor"
+        accepted_quantity: {type: integer, format: int64}
+        rejected_quantity: {type: integer, format: int64}
+        reject_reason: {type: string}
+        comment: {type: string}
+    DeliveryItem:
+      type: object
+      description: После приёмки всегда заявлено = принято + отклонено + карантин.
+      required:
+        - id
+        - product_id
+        - declared_quantity
+        - expires_at
+        - accepted_quantity
+        - rejected_quantity
+        - quarantined_quantity
+        - expired
+        - batch_ids
+        - quarantine_resolutions
+        - in_stock_quantity
+      properties:
+        id: {type: string, format: uuid}
+        product_id: {type: string, format: uuid}
+        product_name:
+          type: string
+          description: Название продукта из каталога компании
+        unit:
+          $ref: "#/components/schemas/Unit"
+        product_category:
+          type: string
+          description: Категория продукта из каталога компании
+        declared_quantity: {type: integer, format: int64}
+        expires_at: {type: string, format: date-time}
+        manufactured_at: {type: string, format: date-time}
+        accepted_quantity: {type: integer, format: int64}
+        rejected_quantity: {type: integer, format: int64}
+        quarantined_quantity:
+          type: integer
+          format: int64
+          description: Карантин, по которому ещё нет решения
+        expired:
+          type: boolean
+          description: Была ли позиция просрочена на момент приёмки
+        batch_ids:
+          type: array
+          description: Партии позиции в порядке создания
+          items: {type: string, format: uuid}
+        reject_reason:
+          type: string
+          description: Значение WriteOffReason; у поставок, принятых до появления перечисления, - свободный текст
+        quarantine_reason:
+          type: string
+          description: Значение WriteOffReason; у поставок, принятых до появления перечисления, - свободный текст
+        comment: {type: string}
+        quarantined_at:
+          type: string
+          format: date-time
+          description: Когда открыт текущий карантин - приёмкой или исправлением. Нет, если карантина нет
+        quarantine_resolutions:
+          type: array
+          description: Решения по карантину позиции в порядке принятия
+          items:
+            $ref: "#/components/schemas/QuarantineDecision"
+        approved:
+          $ref: "#/components/schemas/ItemDistribution"
+        in_stock_quantity:
+          type: integer
+          format: int64
+          description: >-
+            Сумма текущих остатков партий позиции: на столько можно уменьшить принятое количество
+            исправлением. В истории поставки это тоже текущий остаток, а не остаток на момент события
+    DeliveryApproval:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ItemDecision"
+    ItemDecision:
+      type: object
+      required: [item_id, accepted_quantity, rejected_quantity, quarantined_quantity]
+      properties:
+        item_id: {type: string, format: uuid}
+        accepted_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        rejected_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        quarantined_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        reject_reason:
+          $ref: "#/components/schemas/WriteOffReason"
+        quarantine_reason:
+          $ref: "#/components/schemas/WriteOffReason"
+        comment: {type: string, maxLength: 1000}
+    QuarantineResolution:
+      type: object
+      required: [accepted_quantity, rejected_quantity]
+      properties:
+        accepted_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        rejected_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        reject_reason:
+          $ref: "#/components/schemas/WriteOffReason"
+        comment: {type: string, maxLength: 1000}
+    ApprovalCorrection:
+      type: object
+      required: [reason, items]
+      properties:
+        reason: {type: string, maxLength: 1000}
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ItemCorrection"
+    ItemCorrection:
+      type: object
+      description: Итоговое распределение заявленного количества позиции
+      required: [item_id, accepted_quantity, rejected_quantity, quarantined_quantity]
+      properties:
+        item_id: {type: string, format: uuid}
+        accepted_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        rejected_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+        quarantined_quantity: {type: integer, format: int64, minimum: 0, maximum: 1000000000000}
+    Batch:
+      type: object
+      required: [id, point_id, product_id, delivery_id, delivery_number, item_id, received_quantity, quantity, expires_at, received_at]
+      properties:
+        id: {type: string, format: uuid}
+        point_id: {type: string, format: uuid}
+        product_id: {type: string, format: uuid}
+        delivery_id: {type: string, format: uuid}
+        delivery_number:
+          type: string
+          description: Номер поставки, из которой пришла партия
+        item_id: {type: string, format: uuid}
+        received_quantity: {type: integer, format: int64}
+        quantity:
+          type: integer
+          format: int64
+          description: Текущий остаток
+        expires_at: {type: string, format: date-time}
+        received_at: {type: string, format: date-time}
+        expiry_warned_at: {type: string, format: date-time}
+    BatchList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Batch"
+        total:
+          type: integer
+          format: int64
+          description: Сколько партий подходит под условия запроса
+    StockLevel:
+      type: object
+      description: Остаток продукта на складе
+      required: [product, available_quantity, expired_quantity, batches]
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        available_quantity:
+          type: integer
+          format: int64
+          description: Сумма остатков партий с неистёкшим сроком годности, в единице продукта
+        expired_quantity:
+          type: integer
+          format: int64
+          description: Сумма остатков партий, срок годности которых истёк
+        batches:
+          type: integer
+          format: int64
+          description: Число партий с ненулевым остатком
+        nearest_expires_at:
+          type: string
+          format: date-time
+          description: Ближайший срок годности среди непросроченных партий с остатком
+    StockStatus:
+      type: string
+      description: |
+        Статус остатка продукта: in_stock - доступное количество больше нуля; expiring - ближайший
+        срок годной партии наступает не позже чем через сутки; expired - есть просроченное количество;
+        out_of_stock - доступное количество равно нулю.
+      enum: [in_stock, expiring, expired, out_of_stock]
+    StockSummary:
+      type: object
+      description: Число продуктов по статусам. Статусы пересекаются, сумма может превышать total.
+      required: [total, in_stock, expiring, expired, out_of_stock]
+      properties:
+        total: {type: integer, format: int64}
+        in_stock: {type: integer, format: int64}
+        expiring: {type: integer, format: int64}
+        expired: {type: integer, format: int64}
+        out_of_stock: {type: integer, format: int64}
+    StockPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StockLevel"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    DeliveryHistory:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeliveryHistoryEntry"
+    DeliveryHistoryEntry:
+      type: object
+      required: [type, occurred_at, actor, delivery]
+      properties:
+        type:
+          type: string
+          enum: [registered, approved, quarantine_accepted, quarantine_rejected, corrected]
+        occurred_at: {type: string, format: date-time}
+        actor:
+          $ref: "#/components/schemas/Actor"
+        reason:
+          type: string
+          description: Причина корректировки приёмки
+        reject_reason:
+          type: string
+          description: Причина отклонения в решении по карантину
+        comment:
+          type: string
+          description: Комментарий решения по карантину
+        delivery:
+          $ref: "#/components/schemas/Delivery"
+    Movement:
+      type: object
+      description: Движение по продукту - одно событие его складского потока
+      required: [id, type, occurred_at, actor, changes]
+      properties:
+        id: {type: string, format: uuid}
+        type:
+          type: string
+          description: returned - продукты вернулись в партии при отмене заказа
+          enum: [received, consumed, written_off, adjusted, expiry_warning, expired, returned]
+        occurred_at: {type: string, format: date-time}
+        actor:
+          $ref: "#/components/schemas/Actor"
+        changes:
+          type: array
+          description: Изменения остатка по партиям. У предупреждения о сроке изменение нулевое.
+          items:
+            $ref: "#/components/schemas/BatchChange"
+        order_id: {type: string, format: uuid}
+        delivery_id: {type: string, format: uuid}
+        reason: {type: string}
+        comment: {type: string}
+        expires_at:
+          type: string
+          format: date-time
+          description: Срок годности партии - у получения и предупреждения о сроке
+    BatchChange:
+      type: object
+      required: [batch_id, delivery_number, delta]
+      properties:
+        batch_id: {type: string, format: uuid}
+        delivery_number:
+          type: string
+          description: Номер поставки, из которой пришла партия
+        delta:
+          type: integer
+          format: int64
+          description: Изменение остатка партии со знаком, в единице продукта
+    MovementPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Movement"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    DishRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+    DishAvailability:
+      type: object
+      description: Доступность блюда на момент запроса
+      required: [dish, available, portions, limiting, ingredients]
+      properties:
+        dish:
+          $ref: "#/components/schemas/DishRef"
+        available:
+          type: boolean
+          description: Можно ли приготовить хотя бы одну порцию
+        portions:
+          type: integer
+          format: int64
+          description: Сколько порций можно приготовить из текущих остатков
+        reason:
+          type: string
+          enum: [no_recipe, insufficient_stock]
+          description: Почему блюдо нельзя приготовить. Заполнено только у недоступного блюда.
+        limiting:
+          type: array
+          description: |
+            У недоступного блюда - все продукты, которых не хватает на порцию.
+            У доступного - продукты, которые определяют число порций.
+          items:
+            $ref: "#/components/schemas/LimitingIngredient"
+        ingredients:
+          type: array
+          description: Вся рецептура блюда в её порядке, с остатком каждого продукта. У блюда без рецептуры пуст.
+          items:
+            $ref: "#/components/schemas/LimitingIngredient"
+    LimitingIngredient:
+      type: object
+      required: [product, required_quantity, available_quantity, expired_quantity]
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        required_quantity:
+          type: integer
+          format: int64
+          description: Количество на одну порцию, в единице продукта
+        available_quantity:
+          type: integer
+          format: int64
+          description: Доступный остаток продукта - партии с неистёкшим сроком годности
+        expired_quantity:
+          type: integer
+          format: int64
+          description: Остаток просроченных партий; объясняет, почему продукт есть, но недоступен
+    DishAvailabilityPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DishAvailability"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    ExpiringBatch:
+      type: object
+      required: [batch, product, expired]
+      properties:
+        batch:
+          $ref: "#/components/schemas/Batch"
+        product:
+          $ref: "#/components/schemas/Product"
+        expired:
+          type: boolean
+          description: Срок годности истёк на момент запроса
+    ExpiringBatchPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExpiringBatch"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    DishRecommendation:
+      type: object
+      description: Горячее предложение
+      required: [dish, priority, available_portions, suggested_portions, reasons]
+      properties:
+        dish:
+          $ref: "#/components/schemas/DishRef"
+        priority:
+          type: integer
+          format: int32
+          description: Сумма вкладов продуктов под риском, умноженная на 100
+        available_portions:
+          type: integer
+          format: int64
+          description: Сколько порций можно приготовить
+        suggested_portions:
+          type: integer
+          format: int64
+          description: Сколько порций стоит продать, чтобы израсходовать количество под риском
+        reasons:
+          type: array
+          description: Продукты под риском, от самого весомого. У добавленного вручную блюда может быть пустым.
+          items:
+            $ref: "#/components/schemas/RecommendationReason"
+        manual:
+          $ref: "#/components/schemas/ManualOffer"
+    ManualOffer:
+      type: object
+      description: Блюдо добавлено в горячие предложения вручную
+      required: [comment, set_by, set_at]
+      properties:
+        comment:
+          type: string
+          description: Комментарий для официанта, может быть пустым
+        set_by:
+          $ref: "#/components/schemas/Actor"
+        set_at:
+          type: string
+          format: date-time
+    HotOfferMode:
+      type: string
+      enum: [pinned, hidden, auto]
+    HotOfferChange:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          $ref: "#/components/schemas/HotOfferMode"
+        comment:
+          type: string
+          maxLength: 500
+          description: Комментарий для официанта; учитывается у pinned
+        time_zone:
+          type: string
+          description: |
+            Часовой пояс точки, имя IANA (например, Europe/Moscow). Обязателен для hidden:
+            скрытие действует до конца текущего дня в этом поясе, потом блюдо снова выбирает расчёт.
+    HotOfferSetting:
+      type: object
+      required: [dish, mode, comment, set_by, set_at]
+      properties:
+        dish:
+          $ref: "#/components/schemas/DishRef"
+        mode:
+          $ref: "#/components/schemas/HotOfferMode"
+        comment:
+          type: string
+        set_by:
+          $ref: "#/components/schemas/Actor"
+        set_at:
+          type: string
+          format: date-time
+        hidden_until:
+          type: string
+          format: date-time
+          description: До какого момента действует скрытие; есть только у hidden
+    HotOfferSettings:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/HotOfferSetting"
+    RecommendationReason:
+      type: object
+      required: [product, at_risk_quantity, batch_id, expires_at, hours_left, required_quantity, dishes_using,
+                 urgency, coverage, significance, exclusivity]
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        at_risk_quantity:
+          type: integer
+          format: int64
+          description: Сумма остатков партий продукта, истекающих в пределах горизонта
+        batch_id:
+          type: string
+          format: uuid
+          description: Партия с ближайшим сроком годности
+        expires_at: {type: string, format: date-time}
+        hours_left:
+          type: integer
+          format: int32
+          description: Полных часов до окончания срока годности этой партии
+        required_quantity:
+          type: integer
+          format: int64
+          description: Количество продукта на одну порцию блюда
+        dishes_using:
+          type: integer
+          format: int32
+          description: Сколько доступных блюд используют продукт
+        urgency: {type: number, format: double, description: "Срочность, от 0 до 1"}
+        coverage: {type: number, format: double, description: "Доля количества под риском, которую блюдо способно израсходовать"}
+        significance: {type: number, format: double, description: "Меньше 1, если под риском меньше одной порции"}
+        exclusivity: {type: number, format: double, description: "1 у единственного потребителя продукта, стремится к 0.5"}
+    DishRecommendationPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DishRecommendation"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    DeliveryRecommendation:
+      type: object
+      required: [product, available_quantity, consumed_quantity, suggested_quantity, reason, needed_by]
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        available_quantity:
+          type: integer
+          format: int64
+          description: Доступный остаток - партии с неистёкшим сроком годности
+        consumed_quantity:
+          type: integer
+          format: int64
+          description: Расход под заказы за период расчёта
+        cover_hours:
+          type: number
+          format: double
+          description: На сколько часов хватит остатка при таком расходе. Нет, если расхода за период не было.
+        suggested_quantity:
+          type: integer
+          format: int64
+          description: Рекомендуемое количество поставки, в единице продукта
+        reason:
+          type: string
+          enum: [out_of_stock, low_cover]
+        needed_by:
+          type: array
+          description: Блюда, в рецептуру которых входит продукт
+          items:
+            $ref: "#/components/schemas/DishRef"
+    DeliveryRecommendationPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeliveryRecommendation"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    WriteOffStatistic:
+      type: object
+      required: [product, reason, quantity, operations]
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        reason:
+          $ref: "#/components/schemas/WriteOffReason"
+        quantity:
+          type: integer
+          format: int64
+          description: Суммарное списанное количество в единице продукта
+        operations:
+          type: integer
+          format: int64
+          description: Число операций списания
+    WriteOffStatistics:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/WriteOffStatistic"
+    WriteOffDay:
+      type: object
+      required: [day, product, reason, quantity, operations]
+      properties:
+        day:
+          type: string
+          format: date
+          description: День в часовом поясе запроса
+        product:
+          $ref: "#/components/schemas/Product"
+        reason:
+          $ref: "#/components/schemas/WriteOffReason"
+        quantity:
+          type: integer
+          format: int64
+          description: Суммарное списанное количество в единице продукта
+        operations:
+          type: integer
+          format: int64
+          description: Число операций списания
+    WriteOffDays:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: По дням от раннего к позднему
+          items:
+            $ref: "#/components/schemas/WriteOffDay"
+    ShortageStatistic:
+      type: object
+      required: [product, rejected_orders, stop_entries, stop_seconds]
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        rejected_orders:
+          type: integer
+          format: int64
+          description: Число заказов, отклонённых из-за продукта
+        stop_entries:
+          type: integer
+          format: int64
+          description: Число попаданий использующих продукт блюд в стоп-лист
+        stop_seconds:
+          type: integer
+          format: int64
+          description: Суммарное время влияния продукта на блюда в стоп-листе
+    ShortageStatistics:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShortageStatistic"
+    StopListForecast:
+      type: object
+      required: [dish, limiting_product, expected_at, available_quantity, required_quantity, consumption_per_hour, cause]
+      properties:
+        dish:
+          $ref: "#/components/schemas/DishRef"
+        limiting_product:
+          $ref: "#/components/schemas/Product"
+        expected_at:
+          type: string
+          format: date-time
+          description: Ожидаемый момент попадания блюда в стоп-лист
+        available_quantity:
+          type: integer
+          format: int64
+          description: Годный остаток ограничивающего продукта на момент запроса, в единице продукта
+        required_quantity:
+          type: integer
+          format: int64
+          description: Количество ограничивающего продукта на порцию блюда
+        consumption_per_hour:
+          type: number
+          format: double
+          description: Средний расход ограничивающего продукта в час, по которому построен прогноз. Без расхода - 0
+        cause:
+          $ref: "#/components/schemas/StopListForecastCause"
+    StopListForecastCause:
+      type: string
+      enum: [consumption, expiry]
+      description: Почему продукта не хватит - его израсходуют или истечёт срок годности партии
+    StopListForecasts:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StopListForecast"
+    WriteOffReason:
+      type: string
+      enum: [expired, transport_damage, storage_violation, physical_damage, quality_issue, other]
+    WriteOff:
+      type: object
+      required: [quantity, reason, comment]
+      properties:
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000000}
+        reason:
+          $ref: "#/components/schemas/WriteOffReason"
+        comment: {type: string, maxLength: 1000}
+    Adjustment:
+      type: object
+      required: [delta, reason]
+      properties:
+        delta:
+          type: integer
+          format: int64
+          minimum: -1000000000000
+          maximum: 1000000000000
+          description: Изменение остатка со знаком
+        reason: {type: string, maxLength: 1000}
+        comment: {type: string, maxLength: 1000}
+    NewOrder:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OrderItem"
+    OrderItem:
+      type: object
+      required: [dish_id, portions]
+      properties:
+        dish_id: {type: string, format: uuid}
+        portions: {type: integer, format: int64, minimum: 1, maximum: 10000}
+        dish_name:
+          type: string
+          readOnly: true
+          description: Название блюда. Заполняется в ответе, в запросе игнорируется.
+    DeliveryPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Delivery"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    OrderPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        total:
+          type: integer
+          format: int64
+          description: Общее число элементов без учёта limit и offset
+    OrderCancellation:
+      type: object
+      properties:
+        comment:
+          type: string
+          maxLength: 1000
+          description: Комментарий к отмене. Пустой или из одних пробелов не сохраняется
+    Order:
+      type: object
+      required: [id, point_id, status, items, shortages, placed_by]
+      properties:
+        id: {type: string, format: uuid}
+        point_id: {type: string, format: uuid}
+        status: {type: string, enum: [accepted, rejected, cancelled]}
+        placed_at:
+          type: string
+          format: date-time
+          description: Время оформления заказа
+        cancelled_at:
+          type: string
+          format: date-time
+          description: Время отмены - только у отменённого заказа
+        placed_by:
+          $ref: "#/components/schemas/Actor"
+          description: Кто оформил заказ. У заказа Мигома - сервисная учётная запись migom-integration
+        cancelled_by:
+          $ref: "#/components/schemas/Actor"
+          description: Кто отменил заказ - только у отменённого заказа
+        cancel_comment:
+          type: string
+          description: Комментарий к отмене - только у отменённого заказа, если его оставили
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        shortages:
+          type: array
+          description: Недостающие продукты. Заполнено только у отклонённого заказа.
+          items:
+            $ref: "#/components/schemas/Shortage"
+    Shortage:
+      type: object
+      required: [product_id, required_quantity, available_quantity]
+      properties:
+        product_id: {type: string, format: uuid}
+        product:
+          $ref: "#/components/schemas/Product"
+          description: Продукт из каталога, подставляется при ответе. Нет, если продукта в каталоге нет.
+        required_quantity: {type: integer, format: int64}
+        available_quantity: {type: integer, format: int64}
+    MigomOnPoint:
+      type: object
+      required: [outlet_id]
+      properties:
+        outlet_id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+          description: Номер заведения в Мигоме, null - Мигом не подключён
+    MigomPoint:
+      type: object
+      required: [point_id, outlet_id]
+      properties:
+        point_id:
+          type: string
+          format: uuid
+        outlet_id:
+          type: integer
+          format: int64
+          description: Номер заведения в Мигоме
+    NewSupplier:
+      type: object
+      required: [name, point_ids]
+      properties:
+        name: {type: string, maxLength: 200}
+        point_ids:
+          type: array
+          description: Работающие точки компании, хотя бы одна
+          items: {type: string, format: uuid}
+    Supplier:
+      type: object
+      required: [id, company_id, name, point_ids, key_active, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        company_id: {type: string, format: uuid}
+        name: {type: string}
+        point_ids:
+          type: array
+          items: {type: string, format: uuid}
+        key_active:
+          type: boolean
+          description: Действует ли ключ; false - ключ отозван
+        key:
+          type: string
+          description: Ключ поставщика. Есть только в ответе на создание и выпуск ключа
+        created_at: {type: string, format: date-time}
+    SupplierSelf:
+      type: object
+      required: [id, name, company_id, company_name, points]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        company_id: {type: string, format: uuid}
+        company_name: {type: string}
+        points:
+          type: array
+          description: Работающие точки поставщика
+          items:
+            $ref: "#/components/schemas/SupplierPoint"
+    SupplierPoint:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+    GeneratorSettings:
+      type: object
+      required: [running, deliveries_per_minute, orders_per_minute]
+      properties:
+        running:
+          type: boolean
+          description: Создаёт ли генератор поставки и заказы
+        deliveries_per_minute:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 600
+        orders_per_minute:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 600
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+    GeneratorPoint:
+      type: object
+      required: [point_id, company_id, deliveries_per_minute, orders_per_minute]
+      properties:
+        point_id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+          description: Компания точки; из её каталога генератор берёт продукты и блюда
+        deliveries_per_minute:
+          type: integer
+          format: int32
+        orders_per_minute:
+          type: integer
+          format: int32
+    Problem:
+      type: object
+      description: Описание ошибки по RFC 9457
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          description: >-
+            Машиночитаемый вид ошибки. У 409: delivery-already-approved, delivery-not-approved,
+            quarantine-closed, version-conflict (запрос можно повторить), conflict - остальные
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        detail:
+          type: string
+        correlation_id:
+          type: string
+          format: uuid
+        errors:
+          type: array
+          description: Некорректные поля запроса, только для ошибок валидации
+          items:
+            $ref: "#/components/schemas/FieldError"
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+          description: >-
+            Вид ошибки, если он различим: expired - срок годности истёк к моменту действия,
+            stock-consumed - принятое количество нельзя уменьшить ниже уже израсходованного
+        limit:
+          type: integer
+          format: int64
+          description: Предел для stock-consumed - на сколько можно уменьшить принятое количество

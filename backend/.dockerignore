@@ -1,0 +1,7 @@
+.agents
+.claude
+**/*_test.go
+**/testdata
+*.md
+Dockerfile
+.dockerignore

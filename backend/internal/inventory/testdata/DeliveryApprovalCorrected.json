@@ -1,0 +1,20 @@
+{
+  "point_id": "00000000-0000-0000-0000-000000000000",
+  "correction_id": "0198c0de-0000-7000-8000-000000000007",
+  "delivery_id": "0198c0de-0000-7000-8000-000000000002",
+  "reason": "ошибка пересчёта",
+  "corrected_at": "2026-10-10T09:00:00Z",
+  "corrected_by": {
+    "type": "user",
+    "id": "4f1c2a7e-manager"
+  },
+  "items": [
+    {
+      "item_id": "0198c0de-0000-7000-8000-000000000003",
+      "accepted_quantity": 7,
+      "rejected_quantity": 2,
+      "quarantined_quantity": 1,
+      "batch_id": "0198c0de-0000-7000-8000-000000000004"
+    }
+  ]
+}

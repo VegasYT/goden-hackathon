@@ -1,0 +1,16 @@
+# Prometheus окружения разработки опрашивает процессы backend, запущенные на хосте.
+# Незапущенный процесс виден как недоступная цель и опросу остальных не мешает.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: goden-api
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+  - job_name: goden-worker
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+  - job_name: goden-generator
+    static_configs:
+      - targets: ["host.docker.internal:8082"]

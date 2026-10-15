@@ -1,0 +1,56 @@
+# Внешний прокси сервера. Адреса задаются переменными SCHEME и DOMAIN из infra/.env.
+# При SCHEME=https Caddy сам получает и продлевает сертификаты Let's Encrypt;
+# SCHEME=http нужен только для локальной проверки набора без сертификатов.
+{
+	admin off
+}
+
+{$SCHEME}://{$DOMAIN} {
+	encode zstd gzip
+
+	# только API: /metrics, /healthz и /readyz процесса наружу не отдаются
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle /docs* {
+		reverse_proxy docs:8080
+	}
+	handle {
+		reverse_proxy frontend:80
+	}
+}
+
+{$SCHEME}://auth.{$DOMAIN} {
+	reverse_proxy keycloak:8080
+}
+
+{$SCHEME}://grafana.{$DOMAIN} {
+	reverse_proxy grafana:3000
+}
+
+# Сервис доставки Мигом (отдельный репозиторий) живёт на этом же сервере и подключается к сети Goden.
+# Пока он не запущен, его адреса отвечают 502.
+{$SCHEME}://{$MIGOM_DOMAIN} {
+	encode zstd gzip
+
+	# фото товаров - напрямую из бакета MinIO Мигома
+	handle /migom-media/* {
+		reverse_proxy migom-minio:9000
+	}
+	# API, WebSocket и проверки здоровья Мигома
+	handle {
+		reverse_proxy migom-nginx:80
+	}
+}
+
+{$SCHEME}://www.{$MIGOM_DOMAIN} {
+	redir {$SCHEME}://{$MIGOM_DOMAIN}{uri} permanent
+}
+
+{$SCHEME}://owner.{$MIGOM_DOMAIN} {
+	reverse_proxy migom-owner-web:80
+}
+
+{$SCHEME}://admin.{$MIGOM_DOMAIN} {
+	reverse_proxy migom-admin-web:80
+}

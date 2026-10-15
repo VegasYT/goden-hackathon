@@ -1,0 +1,14 @@
+# сборка
+/bin/
+*.exe
+*.test
+
+# покрытие и профили
+coverage.out
+coverage.html
+*.prof
+
+# локальные настройки и секреты
+.env
+.env.*
+!.env.example

@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: goden
+    type: file
+    # правки из интерфейса не сохраняются: дашборд меняется в файле репозитория
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

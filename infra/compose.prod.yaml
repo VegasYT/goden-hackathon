@@ -1,0 +1,338 @@
+# Вся система на одном сервере: внешние сервисы, процессы backend, frontend и прокси с HTTPS.
+# Запуск из корня репозитория, настройки и секреты - в infra/.env (пример: infra/.env.example):
+#   docker compose -f infra/compose.prod.yaml up -d --build --remove-orphans
+#
+# Наружу публикуются только порты прокси (80 и 443). Остальные сервисы доступны
+# друг другу по именам внутри сети compose. Подробности: infra/README.md.
+name: goden-prod
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-backend: &backend
+  <<: *restart
+  build: ../backend
+  image: goden-backend
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgres://goden:${POSTGRES_PASSWORD:?задай POSTGRES_PASSWORD в infra/.env}@postgres:5432/goden?sslmode=disable
+  KAFKA_BROKERS: kafka:19092
+
+services:
+  caddy:
+    <<: *restart
+    image: caddy:2.10-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?задай DOMAIN в infra/.env}
+      SCHEME: ${SCHEME:-https}
+      # домен сервиса доставки Мигом, который выкладывается на этот же сервер
+      MIGOM_DOMAIN: ${MIGOM_DOMAIN:-migom.site}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # сертификаты хранятся между выкладками: иначе каждое пересоздание запрашивало бы их заново
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      default:
+        aliases:
+          # API и генератор обращаются к Keycloak по тому же адресу, что стоит издателем
+          # в токене; внутри сети этот адрес ведёт на прокси, а не наружу
+          - auth.${DOMAIN}
+    # depends_on нет намеренно: API при старте идёт к Keycloak через прокси, поэтому прокси
+    # должен подняться первым; недоступный сервис он отдаёт как 502 и подхватывает сам
+
+  frontend:
+    <<: *restart
+    build:
+      context: ../frontend
+      args:
+        # адрес Keycloak вшивается в сборку frontend; без него вход шёл бы на localhost
+        VITE_KEYCLOAK_URL: ${SCHEME:-https}://auth.${DOMAIN}
+        VITE_KEYCLOAK_REALM: goden
+        VITE_KEYCLOAK_CLIENT_ID: goden-web
+        # раздел «Генератор» у владельца; false скрывает его
+        VITE_GENERATOR_ENABLED: ${GENERATOR_UI:-true}
+    image: goden-frontend
+
+  docs:
+    <<: *restart
+    image: swaggerapi/swagger-ui:v5.29.0
+    environment:
+      BASE_URL: /docs
+      SWAGGER_JSON: /spec/openapi.yaml
+      # токен, введённый в Authorize, сохраняется при обновлении страницы
+      PERSIST_AUTHORIZATION: "true"
+    volumes:
+      - ../backend/api:/spec:ro
+
+  postgres:
+    <<: *restart
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: goden
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: goden
+    volumes:
+      # с PostgreSQL 18 каталог данных лежит в подпапке версии, том монтируется уровнем выше
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goden -d goden"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    <<: *restart
+    image: apache/kafka:4.3.1
+    environment:
+      # один узел в роли broker и controller (KRaft)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: INTERNAL://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # сервер небольшой: без ограничения Kafka занимает 1 ГБ памяти под кучу
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  keycloak:
+    <<: *restart
+    # официальный Keycloak с темой страниц входа goden из frontend/ (infra/keycloak/Dockerfile)
+    build:
+      context: ../frontend
+      dockerfile: ../infra/keycloak/Dockerfile
+    image: goden-keycloak
+    # Данные лежат в томе: пользователи регистрируются сами, и на их идентификаторы ссылаются
+    # компании и назначения (ADR-013). Файл realm применяется только при первом создании тома;
+    # сроки токенов, язык форм, тему страниц входа и подтверждение почты после этого выставляет
+    # keycloak-config, остальное вносят в консоли администратора или пересоздают том.
+    command: ["start", "--import-realm"]
+    # Keycloak дописывает данные на диск при штатной остановке: принудительное завершение
+    # теряет последние изменения, например только что зарегистрированного пользователя
+    stop_grace_period: 60s
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?задай KEYCLOAK_ADMIN_PASSWORD в infra/.env}
+      KC_HEALTH_ENABLED: "true"
+      # HTTPS завершает прокси; Keycloak слушает HTTP и доверяет заголовкам прокси
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: ${SCHEME:-https}://auth.${DOMAIN}
+      JAVA_OPTS_KC_HEAP: -Xms256m -Xmx512m
+      # подстановки файла realm: без них действовали бы пароли локальной разработки
+      GODEN_WEB_URL: ${SCHEME:-https}://${DOMAIN}
+      # второй разрешённый адрес frontend; без DEV_WEB_URL совпадает с основным
+      GODEN_WEB_DEV_URL: ${DEV_WEB_URL:-${SCHEME:-https}://${DOMAIN}}
+      GODEN_GENERATOR_SECRET: ${GENERATOR_CLIENT_SECRET:?задай GENERATOR_CLIENT_SECRET в infra/.env}
+      GODEN_PASSWORD_ADMIN: ${GODEN_PASSWORD_ADMIN:?задай GODEN_PASSWORD_ADMIN в infra/.env}
+      GODEN_PASSWORD_MANAGER: ${GODEN_PASSWORD_MANAGER:?задай GODEN_PASSWORD_MANAGER в infra/.env}
+      GODEN_PASSWORD_APPROVER: ${GODEN_PASSWORD_APPROVER:?задай GODEN_PASSWORD_APPROVER в infra/.env}
+      GODEN_PASSWORD_COOK: ${GODEN_PASSWORD_COOK:?задай GODEN_PASSWORD_COOK в infra/.env}
+      GODEN_PASSWORD_WAITER: ${GODEN_PASSWORD_WAITER:?задай GODEN_PASSWORD_WAITER в infra/.env}
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # в образе нет curl; health-эндпоинт слушает служебный порт 9000
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q 'HTTP/1.1 200' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  keycloak-config:
+    # разовая задача: выставляет настройки realm из infra/.env через API администратора и завершается.
+    # Остальные сервисы её не ждут: сбой виден в её журнале и не мешает запуску системы.
+    # Образ официальный, без темы: задаче нужен только kcadm.sh.
+    image: quay.io/keycloak/keycloak:26.8.0
+    restart: "no"
+    entrypoint: ["/bin/bash", "/configure.sh"]
+    environment:
+      KEYCLOAK_ADMIN_USER: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?задай KEYCLOAK_ADMIN_PASSWORD в infra/.env}
+      # значения по умолчанию совпадают с infra/keycloak/goden-realm.json: меняя одно, поменяй другое
+      KEYCLOAK_ACCESS_TOKEN_LIFESPAN: ${KEYCLOAK_ACCESS_TOKEN_LIFESPAN:-900}
+      KEYCLOAK_SESSION_IDLE_TIMEOUT: ${KEYCLOAK_SESSION_IDLE_TIMEOUT:-432000}
+      KEYCLOAK_SESSION_MAX_LIFESPAN: ${KEYCLOAK_SESSION_MAX_LIFESPAN:-2592000}
+      KEYCLOAK_VERIFY_EMAIL: ${KEYCLOAK_VERIFY_EMAIL:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      # адреса возврата кабинетов Мигома (клиент migom-web)
+      MIGOM_DOMAIN: ${MIGOM_DOMAIN:-migom.site}
+      # секреты клиентов Мигома; без них клиентам выставляется случайный секрет
+      MIGOM_BACKEND_SECRET: ${MIGOM_BACKEND_SECRET:-}
+      MIGOM_INTEGRATION_SECRET: ${MIGOM_INTEGRATION_SECRET:-}
+    volumes:
+      - ./keycloak/configure.sh:/configure.sh:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  migrate:
+    <<: *backend
+    # разовая задача: применяет миграции и завершается; api и worker ждут её успеха
+    restart: "no"
+    command: ["migrate"]
+    environment:
+      <<: *backend-env
+      # демонстрационная компания с тестовыми пользователями; повторный запуск ничего не добавляет
+      DEMO_COMPANY: "true"
+      # чат Telegram её первой точки; пусто - без чата и без уведомлений
+      DEMO_TELEGRAM_CHAT_ID: ${DEMO_TELEGRAM_CHAT_ID:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    command: ["api"]
+    environment:
+      <<: *backend-env
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OIDC_ISSUER: ${SCHEME:-https}://auth.${DOMAIN}/realms/goden
+      CORS_ALLOWED_ORIGINS: ${SCHEME:-https}://${DOMAIN}${DEV_WEB_URL:+,${DEV_WEB_URL}}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      # при первом запуске API перезапускается, пока прокси не получит сертификат для Keycloak
+      start_period: 180s
+
+  worker:
+    <<: *backend
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # уведомления включаются, только когда заданы обе переменные; пустые - worker работает без них
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # Прокси для запросов к api.telegram.org: с серверов в РФ Telegram недоступен напрямую.
+      # HTTP-клиент Go читает HTTPS_PROXY сам; PostgreSQL и Kafka идут не по HTTP и прокси не используют.
+      HTTPS_PROXY: ${TELEGRAM_PROXY_URL:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+
+  generator:
+    <<: *backend
+    command: ["generator"]
+    environment:
+      API_URL: http://api:8080/api/v1
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OIDC_ISSUER: ${SCHEME:-https}://auth.${DOMAIN}/realms/goden
+      GENERATOR_CLIENT_ID: goden-generator
+      GENERATOR_CLIENT_SECRET: ${GENERATOR_CLIENT_SECRET}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.15.0
+    # Тома нет: история метрик не переживает пересоздание контейнера.
+    volumes:
+      - ./prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+
+  loki:
+    <<: *restart
+    build: ./loki
+    image: goden-loki
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "/usr/bin/wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  promtail:
+    <<: *restart
+    image: grafana/promtail:3.6.11
+    command: ["-config.file=/etc/promtail/promtail.yml", "-config.expand-env=true"]
+    environment:
+      COMPOSE_PROJECT: goden-prod
+      LOG_ENVIRONMENT: production
+    volumes:
+      - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail-positions:/var/lib/promtail
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/promtail", "-config.file=/etc/promtail/promtail.yml", "-config.expand-env=true", "-check-syntax"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:13.2.3
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?задай GRAFANA_ADMIN_PASSWORD в infra/.env}
+      GF_SERVER_ROOT_URL: ${SCHEME:-https}://grafana.${DOMAIN}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/goden-backend.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  keycloak-data:
+  kafka-data:
+  loki-data:
+  promtail-positions:
+  caddy-data:
+  caddy-config:

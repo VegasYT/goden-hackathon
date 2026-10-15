@@ -1,0 +1,188 @@
+# Окружение разработки: внешние сервисы, к которым backend и frontend подключаются с хоста.
+# Запуск из корня репозитория: docker compose -f infra/compose.yaml up -d --wait
+#
+# Только для локальной разработки: пароли известны и лежат в репозитории.
+# Порты публикуются на 127.0.0.1 и переопределяются переменными окружения.
+name: goden
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: goden
+      POSTGRES_PASSWORD: goden
+      POSTGRES_DB: goden
+    ports:
+      # не 5432: на машинах разработчиков он часто занят локальным PostgreSQL
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      # с PostgreSQL 18 каталог данных лежит в подпапке версии, том монтируется уровнем выше
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goden -d goden"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:4.3.1
+    environment:
+      # один узел в роли broker и controller (KRaft)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # HOST - для процессов на хосте, INTERNAL - для контейнеров этой сети
+      KAFKA_LISTENERS: HOST://:9092,INTERNAL://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:${KAFKA_PORT:-9092},INTERNAL://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports:
+      - "127.0.0.1:${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  redis:
+    image: redis:8.8.3-alpine
+    # без сохранения на диск: Redis только ускоряет, его данные можно терять (ADR-003)
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    # Официальный Keycloak с темой страниц входа goden из frontend/. Первая сборка долгая
+    # (зависимости pnpm и Maven); up сам образ не пересобирает, после правки темы нужен --build.
+    build:
+      context: ../frontend
+      dockerfile: ../infra/keycloak/Dockerfile
+    image: goden-keycloak
+    # Тома нет: realm создаётся из файла при каждом создании контейнера.
+    # Изменения, сделанные в консоли вручную, теряются при down.
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      # Фиксированный адрес издателя: без него Keycloak пишет в токен тот адрес, по которому
+      # к нему обратились, и токен, полученный через 127.0.0.1, API с OIDC_ISSUER на localhost отклонит.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8180}
+      # контейнеры этой сети обращаются к Keycloak по имени сервиса, издатель в токене при этом не меняется
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    ports:
+      # 8080 на хосте занят API
+      - "127.0.0.1:${KEYCLOAK_PORT:-8180}:8080"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # в образе нет curl; health-эндпоинт слушает служебный порт 9000
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q 'HTTP/1.1 200' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    # Тома нет: история метрик не переживает пересоздание контейнера.
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      # процессы backend работают на хосте; на Linux это имя само не определяется
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  loki:
+    build: ./loki
+    image: goden-loki
+    command: ["-config.file=/etc/loki/loki.yml"]
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "/usr/bin/wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  promtail:
+    image: grafana/promtail:3.6.11
+    command: ["-config.file=/etc/promtail/promtail.yml", "-config.expand-env=true"]
+    environment:
+      COMPOSE_PROJECT: goden
+      LOG_ENVIRONMENT: development
+    volumes:
+      - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail-positions:/var/lib/promtail
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/promtail", "-config.file=/etc/promtail/promtail.yml", "-config.expand-env=true", "-check-syntax"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    environment:
+      # вход без пароля с полными правами: только для локальной разработки
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/goden-backend.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres-data:
+  kafka-data:
+  loki-data:
+  promtail-positions:

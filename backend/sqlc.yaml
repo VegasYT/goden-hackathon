@@ -1,0 +1,155 @@
+# Генерация: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+# Новый модуль добавляется отдельным элементом списка sql с теми же настройками.
+version: "2"
+sql:
+  - engine: postgresql
+    # схема читается прямо из миграций goose, отдельной копии нет
+    schema: migrations
+    queries: internal/catalog/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/catalog/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        # без этого в пакет попали бы структуры всех таблиц базы
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: github.com/google/uuid
+              type: UUID
+              pointer: true
+  - engine: postgresql
+    schema: migrations
+    queries: internal/organization/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/organization/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+  - engine: postgresql
+    schema: migrations
+    queries: internal/inventory/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/inventory/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              import: time
+              type: Time
+              pointer: true
+  - engine: postgresql
+    schema: migrations
+    queries: internal/migom/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/migom/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+  - engine: postgresql
+    schema: migrations
+    queries: internal/suppliers/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/suppliers/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+  - engine: postgresql
+    schema: migrations
+    queries: internal/generator/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/generator/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+  - engine: postgresql
+    schema: migrations
+    queries: internal/orders/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/orders/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+  - engine: postgresql
+    schema: migrations
+    queries: internal/analytics/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/analytics/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+  - engine: postgresql
+    schema: migrations
+    queries: internal/recommendations/queries.sql
+    gen:
+      go:
+        package: db
+        out: internal/recommendations/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              import: time
+              type: Time
+              pointer: true

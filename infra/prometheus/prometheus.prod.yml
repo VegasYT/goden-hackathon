@@ -1,0 +1,15 @@
+# Prometheus сервера опрашивает процессы backend по именам сервисов compose.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: goden-api
+    static_configs:
+      - targets: ["api:8080"]
+  - job_name: goden-worker
+    static_configs:
+      - targets: ["worker:8081"]
+  - job_name: goden-generator
+    static_configs:
+      - targets: ["generator:8082"]

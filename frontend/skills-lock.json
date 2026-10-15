@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "skills": {
+    "feature-sliced-design": {
+      "source": "feature-sliced/skills",
+      "sourceType": "github",
+      "skillPath": "feature-sliced-design/SKILL.md",
+      "computedHash": "98d09ea1a9acac34fc5720c610c4ee7c7780dd30b2f287d733961f8e7e9d980b"
+    },
+    "interface-design": {
+      "source": "dammyjay93/interface-design",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/interface-design/SKILL.md",
+      "computedHash": "340cc79a1558f09371aa3eb689952a8b777c1d7362c24226e99693606a80828e"
+    },
+    "material-ui-styling": {
+      "source": "mui/material-ui",
+      "sourceType": "github",
+      "skillPath": "skills/material-ui-styling/SKILL.md",
+      "computedHash": "3aee2bcb4c2ea1fcba3d97f7e43a3208bfc0d477f494d06dad22c1ec25c33ac3"
+    },
+    "material-ui-theming": {
+      "source": "mui/material-ui",
+      "sourceType": "github",
+      "skillPath": "skills/material-ui-theming/SKILL.md",
+      "computedHash": "06f09d0152bf43a8f64d170a67418e7f33ac265bc995e2fed47adb5bcc979a54"
+    },
+    "no-ai-design-slop": {
+      "source": "mengto/skills",
+      "sourceType": "github",
+      "skillPath": "agent-skills/ui/no-ai-design-slop/SKILL.md",
+      "computedHash": "b3b7e88b282f4e498c10592d77f3a55e65ad1b81979cf2a6b06aa07e84eed34f"
+    },
+    "react-router": {
+      "source": "TanStack/router",
+      "sourceType": "github",
+      "skillPath": "packages/react-router/skills/react-router/SKILL.md",
+      "computedHash": "f762a6278b2b1ae911195cc7748d213ed08f37cb70ce33aef1578a5759ef01d2"
+    },
+    "router-core": {
+      "source": "TanStack/router",
+      "sourceType": "github",
+      "skillPath": "packages/router-core/skills/router-core/SKILL.md",
+      "computedHash": "605884918fb968d0ea9fb4f4b950ebb6e4092930207a127af75acf8d3cdcd15a"
+    },
+    "router-plugin": {
+      "source": "TanStack/router",
+      "sourceType": "github",
+      "skillPath": "packages/router-plugin/skills/router-plugin/SKILL.md",
+      "computedHash": "9954f6c52398cb2a84cd67cf79eac683e6e72848a3eb10c5bf79e14ac056e3a5"
+    },
+    "router-query": {
+      "source": "TanStack/router",
+      "sourceType": "github",
+      "skillPath": "packages/react-router/skills/compositions/router-query/SKILL.md",
+      "computedHash": "5bf823f289bcb1627094a38bc587570acba0dd8b4e8164bf12401f133d610923"
+    },
+    "tanstack-query-best-practices": {
+      "source": "deckardger/tanstack-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/tanstack-query/SKILL.md",
+      "computedHash": "8e5a7e3cdc6900c3967945658aa277629ba7b5264ddadc017ee2b76359456719"
+    }
+  }
+}

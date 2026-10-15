@@ -1,0 +1,8 @@
+# Настройки генератора ogen. Генерация:
+#   go run github.com/ogen-go/ogen/cmd/ogen@v1.24.0 --target internal/api/oas --package oas --clean api/openapi.yaml
+generator:
+  features:
+    disable:
+      # метрики API считает internal/api/metrics.go через client_golang, трассировки нет:
+      # зависимости OpenTelemetry не нужны
+      - "ogen/otel"

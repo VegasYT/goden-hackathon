@@ -1,0 +1,11 @@
+dist
+node_modules
+pnpm-lock.yaml
+skills-lock.json
+.agents
+src/app/routeTree.gen.ts
+src/shared/api/schema.gen.ts
+src/app/keycloak-theme/kc.gen.tsx
+dist_keycloak
+*.md
+public/keycloakify-dev-resources

@@ -1,0 +1,328 @@
+{
+  "realm": "goden",
+  "displayName": "Goden",
+  "enabled": true,
+  "registrationAllowed": true,
+  "loginTheme": "goden",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["ru"],
+  "defaultLocale": "ru",
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 432000,
+  "ssoSessionMaxLifespan": 2592000,
+  "roles": {
+    "client": {
+      "goden-api": [
+        {
+          "name": "generator.run",
+          "description": "Учётная запись генератора событий: список точек, на которых он включён"
+        },
+        {
+          "name": "migom.integration",
+          "description": "Учётная запись сервиса доставки Мигом: права на точках, где владелец подключил Мигом"
+        }
+      ]
+    }
+  },
+  "clients": [
+    {
+      "clientId": "goden-api",
+      "name": "Backend API",
+      "enabled": true,
+      "bearerOnly": true,
+      "description": "Получатель токенов (aud). Права пользователей определяют назначения в системе (ADR-013); единственная роль клиента - generator.run"
+    },
+    {
+      "clientId": "goden-web",
+      "name": "Frontend",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "${GODEN_WEB_URL:http://localhost:5173}/*",
+        "${GODEN_WEB_DEV_URL:http://localhost:5173}/*"
+      ],
+      "webOrigins": [
+        "${GODEN_WEB_URL:http://localhost:5173}",
+        "${GODEN_WEB_DEV_URL:http://localhost:5173}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${GODEN_WEB_URL:http://localhost:5173}/*##${GODEN_WEB_DEV_URL:http://localhost:5173}/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "goden-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "goden-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "goden-generator",
+      "name": "Генератор событий",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${GODEN_GENERATOR_SECRET:goden-generator-dev-secret}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "goden-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "goden-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "client-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "user.session.note": "client_id",
+            "claim.name": "client_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "migom-api",
+      "name": "Мигом API",
+      "enabled": true,
+      "bearerOnly": true,
+      "description": "Получатель токенов (aud) сервиса доставки Мигом"
+    },
+    {
+      "clientId": "migom-integration",
+      "name": "Мигом в API Goden",
+      "enabled": true,
+      "description": "Backend Мигома в API Goden: меню и заказы на точках, где владелец подключил Мигом",
+      "publicClient": false,
+      "secret": "${MIGOM_INTEGRATION_SECRET:migom-integration-dev-secret}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "goden-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "goden-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "client-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": {
+            "user.session.note": "client_id",
+            "claim.name": "client_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "migom-web",
+      "name": "Мигом: кабинеты",
+      "enabled": true,
+      "description": "Кабинеты владельца и модератора Мигома: вход с PKCE, токен действует в API Мигома и Goden",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:5174/*", "http://localhost:5175/*"],
+      "webOrigins": ["http://localhost:5174", "http://localhost:5175"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5174/*##http://localhost:5175/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "migom-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "migom-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "goden-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "goden-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "migom-backend",
+      "name": "Мигом backend",
+      "enabled": true,
+      "description": "Backend Мигома: вход пользователей по паролю, обновление токена и учётные записи через Admin API",
+      "publicClient": false,
+      "secret": "${MIGOM_BACKEND_SECRET:migom-backend-dev-secret}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "migom-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "migom-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "goden-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "goden-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "0a000000-0000-4000-8000-000000000001",
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@goden.local",
+      "firstName": "Администратор",
+      "lastName": "Тестовый",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${GODEN_PASSWORD_ADMIN:admin}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "0a000000-0000-4000-8000-000000000002",
+      "username": "manager",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "manager@goden.local",
+      "firstName": "Менеджер",
+      "lastName": "Тестовый",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${GODEN_PASSWORD_MANAGER:manager}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "0a000000-0000-4000-8000-000000000003",
+      "username": "approver",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "approver@goden.local",
+      "firstName": "Приёмщик",
+      "lastName": "Тестовый",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${GODEN_PASSWORD_APPROVER:approver}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "0a000000-0000-4000-8000-000000000004",
+      "username": "cook",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "cook@goden.local",
+      "firstName": "Повар",
+      "lastName": "Тестовый",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${GODEN_PASSWORD_COOK:cook}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "0a000000-0000-4000-8000-000000000005",
+      "username": "waiter",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "waiter@goden.local",
+      "firstName": "Официант",
+      "lastName": "Тестовый",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${GODEN_PASSWORD_WAITER:waiter}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "service-account-goden-generator",
+      "enabled": true,
+      "serviceAccountClientId": "goden-generator",
+      "clientRoles": {
+        "goden-api": [
+          "generator.run"
+        ]
+      }
+    },
+    {
+      "username": "service-account-migom-integration",
+      "enabled": true,
+      "serviceAccountClientId": "migom-integration",
+      "clientRoles": {
+        "goden-api": [
+          "migom.integration"
+        ]
+      }
+    },
+    {
+      "username": "service-account-migom-backend",
+      "enabled": true,
+      "serviceAccountClientId": "migom-backend",
+      "clientRoles": {
+        "realm-management": [
+          "manage-users",
+          "view-users",
+          "query-users"
+        ]
+      }
+    }
+  ]
+}

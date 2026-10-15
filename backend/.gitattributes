@@ -1,0 +1,7 @@
+# gofmt и эталонные JSON требуют LF: без этого git на Windows подставит CRLF при checkout
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+*.sql text eol=lf
+*.json text eol=lf
+*.yml text eol=lf

@@ -1,0 +1,26 @@
+{
+  "point_id": "00000000-0000-0000-0000-000000000000",
+  "delivery_id": "0198c0de-0000-7000-8000-000000000002",
+  "delivered_at": "2026-10-10T08:30:00Z",
+  "approved_at": "2026-10-10T09:00:00Z",
+  "approved_by": {
+    "type": "user",
+    "id": "4f1c2a7e-manager"
+  },
+  "items": [
+    {
+      "item_id": "0198c0de-0000-7000-8000-000000000003",
+      "product_id": "0198c0de-0000-7000-8000-000000000001",
+      "declared_quantity": 10,
+      "accepted_quantity": 6,
+      "rejected_quantity": 3,
+      "quarantined_quantity": 1,
+      "expires_at": "2026-10-15T00:00:00Z",
+      "expired": false,
+      "batch_id": "0198c0de-0000-7000-8000-000000000004",
+      "reject_reason": "damaged_package",
+      "quarantine_reason": "temperature_check",
+      "comment": "три упаковки вскрыты, одна тёплая"
+    }
+  ]
+}

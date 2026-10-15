@@ -1,0 +1,11 @@
+node_modules
+dist
+dist_keycloak
+.agents
+.claude
+.env
+.env.*
+!.env.example
+*.md
+Dockerfile
+.dockerignore

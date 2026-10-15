@@ -1,0 +1,19 @@
+{
+  "point_id": "0198c0de-0000-7000-8000-000000000008",
+  "delivery_id": "0198c0de-0000-7000-8000-000000000002",
+  "number": "ПН-000123",
+  "delivered_at": "2026-10-10T08:30:00Z",
+  "registered_by": {
+    "type": "user",
+    "id": "4f1c2a7e-manager"
+  },
+  "items": [
+    {
+      "item_id": "0198c0de-0000-7000-8000-000000000003",
+      "product_id": "0198c0de-0000-7000-8000-000000000001",
+      "declared_quantity": 10,
+      "expires_at": "2026-10-15T00:00:00Z",
+      "manufactured_at": "2026-10-09T00:00:00Z"
+    }
+  ]
+}
